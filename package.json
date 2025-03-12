@@ -1,0 +1,25 @@
+{
+	"name": "options-chain-mcp",
+	"version": "1.0.0",
+	"main": "index.js",
+	"type": "module",
+	"bin": {
+		"options-chain-mcp": "./build/index.js"
+	},
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1",
+		"build": "tsc && node -e \"const fs = require('fs'); const content = fs.readFileSync('build/index.js', 'utf8'); fs.writeFileSync('build/index.js', '#!/usr/bin/env node\\n' + content); fs.chmodSync('build/index.js', '755');\""
+	},
+	"files": ["build"],
+	"keywords": ["options", "chain", "mcp", "tradier", "sandbox", "api"],
+	"author": "Blake Morgan",
+	"license": "MIT",
+	"description": "Claude MCP server for Tradier Sandbox API options chain endpoint",
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.0.4",
+		"@types/node": "^22.10.2",
+		"node-fetch": "^3.3.2",
+		"typescript": "^5.7.2",
+		"zod": "^3.24.1"
+	}
+}

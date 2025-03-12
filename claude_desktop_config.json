@@ -1,0 +1,11 @@
+{
+	"mcpServers": {
+		"options-chain-mcp": {
+			"command": "/usr/local/bin/node",
+			"args": ["/Full/Route/to/Folder/options-chain/build/index.js"],
+			"env": {
+				"token": "your_sandbox_api_token_here"
+			}
+		}
+	}
+}
