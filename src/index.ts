@@ -12,16 +12,31 @@ import {
 import fetch from "node-fetch";
 
 const server = new Server(
-	{ name: "options-chain", version: "1.0.0" },
+	{ name: "options-chain", version: "1.0.1" },
 	{
 		capabilities: {
 			tools: {},
 			prompts: {},
 			roots: {},
 			resources: {},
+			logging: {},
 		},
 	},
 );
+
+// Create a safe logging function that works whether the server is connected or not
+function safeLog(
+	level: "info" | "error" | "debug" | "warning",
+	data: string,
+): void {
+	try {
+		// Only try to use server logging if we're after initialization
+		server.sendLoggingMessage({ level, data });
+	} catch (err) {
+		// Don't use console.log as it breaks the MCP protocol
+		// Instead, we'll just swallow the error since we can't log before connection
+	}
+}
 
 const API_SCHEMAS: Record<string, unknown> = {};
 
@@ -44,6 +59,7 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
 });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
+	safeLog("info", "ListToolsRequest received");
 	return {
 		tools: [
 			{
@@ -141,6 +157,11 @@ function filterStrikesByPercentage(
 	const lowerBound = underlyingPrice * (1 - percentage / 100);
 	const upperBound = underlyingPrice * (1 + percentage / 100);
 
+	safeLog(
+		"debug",
+		`Strike price bounds: ${lowerBound} to ${upperBound} (underlying: ${underlyingPrice}, percentage: ${percentage}%)`,
+	);
+
 	return { lowerBound, upperBound };
 }
 
@@ -156,6 +177,11 @@ function filterSignificantStrikePrices(
 	percentage: number,
 	strikePrices: number[],
 ): number[] {
+	safeLog(
+		"debug",
+		`Filtering ${strikePrices.length} strike prices around ${underlyingPrice} with ${percentage}% range`,
+	);
+
 	// First filter by the percentage range
 	const { lowerBound, upperBound } = filterStrikesByPercentage(
 		underlyingPrice,
@@ -172,7 +198,7 @@ function filterSignificantStrikePrices(
 	}));
 
 	// Filter based on distance from current price
-	return strikesWithDistance
+	const result = strikesWithDistance
 		.filter(({ strike }) => strike >= lowerBound && strike <= upperBound)
 		.filter(({ strike, distance }) => {
 			// Very close to current price (within 2%) - include all strikes
@@ -218,6 +244,13 @@ function filterSignificantStrikePrices(
 			return strike % 10 < 0.01 || strike % 10 > 9.99;
 		})
 		.map(({ strike }) => strike);
+
+	safeLog(
+		"debug",
+		`Filtered from ${strikePrices.length} to ${result.length} significant strikes`,
+	);
+
+	return result;
 }
 
 // Add interface for options chain parameters
@@ -269,10 +302,17 @@ interface HistoricalPricesParams {
 }
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
+	safeLog("info", `Tool request received: ${request.params.name}`);
+
 	let responseData: OptionsChainResult | Record<string, unknown> | null = null;
 
 	if (request.params.name === "find-options-chain") {
 		const params = request.params.arguments as unknown as OptionsChainParams;
+
+		safeLog(
+			"info",
+			`Options chain request parameters: ${JSON.stringify(params)}`,
+		);
 
 		// Create URL with search parameters
 		const searchParams = new URLSearchParams();
@@ -281,7 +321,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 		if (params.greeks !== undefined)
 			searchParams.append("greeks", params.greeks.toString());
 
+		// Check if token is available
+		if (!process.env.token) {
+			safeLog("error", "API token is missing - check environment variables");
+			throw new Error(
+				"API token is missing. Please set the 'token' environment variable.",
+			);
+		}
+
+		safeLog("info", `Fetching quote for symbol: ${params.symbol}`);
+
 		const quoteUrl = `https://sandbox.tradier.com/v1/markets/quotes?symbols=${params.symbol}`;
+		safeLog("debug", `Quote URL: ${quoteUrl}`);
+
 		const quoteResponse = await fetch(quoteUrl, {
 			method: "GET",
 			headers: {
@@ -290,22 +342,58 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			},
 		});
 
+		safeLog(
+			"debug",
+			`Quote API response status: ${quoteResponse.status} ${quoteResponse.statusText}`,
+		);
+
 		if (!quoteResponse.ok) {
+			safeLog(
+				"error",
+				`Failed to fetch quote: ${quoteResponse.statusText} for ${params.symbol}`,
+			);
 			throw new Error(
 				`Failed to fetch quote: ${quoteResponse.statusText} when using params: ${params.symbol}`,
 			);
 		}
 
 		const quoteData = (await quoteResponse.json()) as Record<string, unknown>;
+		safeLog(
+			"debug",
+			`Quote data structure: ${JSON.stringify(Object.keys(quoteData))}`,
+		);
 
 		// Properly type the quote data structure
 		const quotesData = quoteData.quotes as Record<string, unknown> | undefined;
+
+		if (!quotesData) {
+			safeLog(
+				"error",
+				`Quote data missing 'quotes' property: ${JSON.stringify(quoteData)}`,
+			);
+		}
+
 		const quoteArray = Array.isArray(quotesData?.quote)
 			? (quotesData?.quote as Record<string, unknown>[])
 			: ([quotesData?.quote] as Record<string, unknown>[]);
+
+		if (!quoteArray || quoteArray.length === 0) {
+			safeLog("error", "No quote data found in API response");
+		}
+
 		const currentPrice = (quoteArray[0]?.last as number) || 0;
 
+		safeLog("info", `Current price for ${params.symbol}: ${currentPrice}`);
+
+		if (currentPrice === 0) {
+			safeLog(
+				"warning",
+				"Current price is 0, which might cause filtering issues",
+			);
+		}
+
 		const chainUrl = `https://sandbox.tradier.com/v1/markets/options/chains?${searchParams.toString()}`;
+		safeLog("info", `Fetching options chain with URL: ${chainUrl}`);
 
 		const chainResponse = await fetch(chainUrl, {
 			method: "GET",
@@ -315,13 +403,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			},
 		});
 
+		safeLog(
+			"debug",
+			`Options chain API response status: ${chainResponse.status} ${chainResponse.statusText}`,
+		);
+
 		if (!chainResponse.ok) {
+			safeLog(
+				"error",
+				`Failed to fetch options chain: ${chainResponse.statusText} with params: ${searchParams.toString()}`,
+			);
 			throw new Error(
 				`Failed to fetch options chain: ${chainResponse.statusText} when using params: ${searchParams.toString()}`,
 			);
 		}
 
 		const chainData = (await chainResponse.json()) as Record<string, unknown>;
+		safeLog(
+			"debug",
+			`Chain data structure: ${JSON.stringify(Object.keys(chainData))}`,
+		);
 
 		// once we have the data we need to clean it up before returning it.
 		// we need to remove options with no volume, no bid, no ask, or bid and as less then 0.10, also limit strikes to within 20% of the current price
@@ -332,7 +433,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 		const optionsData = chainDataTyped.options as
 			| Record<string, unknown>
 			| undefined;
+
+		if (!optionsData) {
+			safeLog(
+				"error",
+				`Options chain response missing 'options' property: ${JSON.stringify(chainData)}`,
+			);
+		}
+
 		const rawOptions = (optionsData?.option as unknown[]) || [];
+
+		safeLog("info", `Raw options count: ${rawOptions.length}`);
+
+		if (rawOptions.length === 0) {
+			safeLog(
+				"warning",
+				"No options found in API response. Check expiration date and symbol.",
+			);
+		}
 
 		// Map raw options to our OptionData interface, keeping only the fields we want
 		const mappedOptions = rawOptions.map((rawOption: unknown) => {
@@ -368,6 +486,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			return mappedOption;
 		});
 
+		safeLog("debug", `Mapped options count: ${mappedOptions.length}`);
+
 		// Apply basic filters first
 		const qualityFilteredOptions = mappedOptions.filter(
 			(option: OptionData) => {
@@ -384,6 +504,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			},
 		);
 
+		safeLog(
+			"info",
+			`Options after quality filtering: ${qualityFilteredOptions.length}`,
+		);
+
+		if (qualityFilteredOptions.length === 0) {
+			safeLog(
+				"warning",
+				"All options were filtered out by quality filters (volume > 0, bid > 0.1, ask > 0.1)",
+			);
+		}
+
 		// Default strike percentage if not provided
 		const strikePercentage =
 			params.strike_percentage !== undefined
@@ -393,6 +525,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 		// Extract all available strike prices
 		const allStrikes = qualityFilteredOptions.map((option) => option.strike);
 
+		safeLog(
+			"debug",
+			`Unique strikes before filtering: ${new Set(allStrikes).size}`,
+		);
+
 		// Filter to only include significant strike prices
 		const significantStrikes = filterSignificantStrikePrices(
 			currentPrice,
@@ -400,10 +537,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			allStrikes,
 		);
 
+		safeLog(
+			"debug",
+			`Significant strikes after filtering: ${significantStrikes.length}`,
+		);
+
 		// Final filtering to only include options with significant strike prices
 		const filteredOptions = qualityFilteredOptions.filter((option) =>
 			significantStrikes.includes(option.strike),
 		);
+
+		safeLog("info", `Final filtered options count: ${filteredOptions.length}`);
 
 		// Return the options chain data with proper structure
 		responseData = { option: filteredOptions };
@@ -412,6 +556,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 	if (request.params.name === "historical-prices") {
 		const params = request.params
 			.arguments as unknown as HistoricalPricesParams;
+
+		safeLog(
+			"info",
+			`Historical prices request parameters: ${JSON.stringify(params)}`,
+		);
 
 		const searchParams = new URLSearchParams();
 		if (params.symbol) searchParams.append("symbol", params.symbol);
@@ -423,6 +572,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 		const historicalPricesUrl = `https://sandbox.tradier.com/v1/markets/history?${searchParams.toString()}`;
 
+		safeLog(
+			"info",
+			`Fetching historical prices with URL: ${historicalPricesUrl}`,
+		);
+
 		const historicalPricesResponse = await fetch(historicalPricesUrl, {
 			method: "GET",
 			headers: {
@@ -431,7 +585,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			},
 		});
 
+		safeLog(
+			"debug",
+			`Historical prices API response status: ${historicalPricesResponse.status} ${historicalPricesResponse.statusText}`,
+		);
+
 		if (!historicalPricesResponse.ok) {
+			safeLog(
+				"error",
+				`Failed to fetch historical prices: ${historicalPricesResponse.statusText} with params: ${searchParams.toString()}`,
+			);
 			throw new Error(
 				`Failed to fetch historical prices: ${historicalPricesResponse.statusText} when using params: ${searchParams.toString()}`,
 			);
@@ -440,9 +603,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 		const historicalPricesData =
 			(await historicalPricesResponse.json()) as Record<string, unknown>;
 
+		safeLog(
+			"debug",
+			`Historical prices data structure: ${JSON.stringify(Object.keys(historicalPricesData))}`,
+		);
+
 		// the data is already in the format we want, so we can just return it
 		responseData = historicalPricesData;
 	}
+
+	safeLog(
+		"info",
+		`Returning response with ${responseData && "option" in responseData ? (responseData.option as OptionData[]).length : "unknown"} options`,
+	);
 
 	return {
 		content: [
@@ -455,8 +628,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 async function main() {
+	// Connect without any console output
 	const transport = new StdioServerTransport();
 	await server.connect(transport);
+
+	// Now that we're connected, we can safely use server logging
+	server.sendLoggingMessage({
+		level: "info",
+		data: "Server initialization started",
+	});
+
+	server.sendLoggingMessage({
+		level: "info",
+		data: "Server started successfully",
+	});
 }
 
 /**
@@ -499,6 +684,7 @@ function testSignificantStrikePrices() {
 // testSignificantStrikePrices();
 
 main().catch((err) => {
-	console.error("Error starting server:", err);
+	// We can't use console.error here as it breaks the protocol
+	// Just exit with an error code
 	process.exit(1);
 });
