@@ -3,7 +3,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListPromptsRequestSchema, ListToolsRequestSchema, ListRootsRequestSchema, ListResourcesRequestSchema, ReadResourceRequestSchema, } from "@modelcontextprotocol/sdk/types.js";
 import fetch from "node-fetch";
-const server = new Server({ name: "options-chain", version: "1.0.0" }, {
+const server = new Server({ name: "options-chain", version: "1.0.1" }, {
     capabilities: {
         tools: {},
         prompts: {},
@@ -45,7 +45,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         tools: [
             {
                 name: "find-options-chain",
-                description: "Query the Tradier API to find options chains based on a symbol on a given expiration date. Limits the results to options with volume, bid, and ask greater than 0.10 and strikes within a percentage of the current price",
+                description: "Query the Tradier API to find options chains based on a symbol on a given expiration date. Limits the results to options with volume, bid, and ask greater than 0.10 and strikes within a percentage of the current price. If nothing is found, the tool will return null which could indicate that the symbol or the expiration date is not valid.",
                 inputSchema: {
                     type: "object",
                     properties: {
@@ -108,6 +108,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                             enum: ["all", "open"],
                             default: "all",
                             optional: true,
+                        },
+                    },
+                },
+            },
+            {
+                name: "find-option-expirations",
+                description: "Query the Tradier API to find all option expirations for a given symbol. This is useful for finding expiration dates that can be used in the find-options-chain tool.",
+                inputSchema: {
+                    type: "object",
+                    properties: {
+                        symbol: {
+                            type: "string",
+                            description: "The underlying symbol to find option expirations for",
                         },
                     },
                 },
@@ -194,6 +207,37 @@ function filterSignificantStrikePrices(underlyingPrice, percentage, strikePrices
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
     safeLog("info", `Tool request received: ${request.params.name}`);
     let responseData = null;
+    if (request.params.name === "find-option-expirations") {
+        const params = request.params
+            .arguments;
+        safeLog("info", `Find option expirations request parameters: ${JSON.stringify(params)}`);
+        const searchParams = new URLSearchParams();
+        if (params.symbol)
+            searchParams.append("symbol", params.symbol);
+        searchParams.append("includeAllRoots", "true");
+        searchParams.append("expirationType", "true");
+        const expirationsUrl = `https://sandbox.tradier.com/v1/markets/options/expirations?${searchParams.toString()}`;
+        safeLog("info", `Fetching option expirations with URL: ${expirationsUrl}`);
+        const expirationsResponse = await fetch(expirationsUrl, {
+            method: "GET",
+            headers: {
+                Authorization: `Bearer ${process.env.token}`,
+                Accept: "application/json",
+            },
+        });
+        safeLog("debug", `Option expirations API response status: ${expirationsResponse.status} ${expirationsResponse.statusText}`);
+        if (!expirationsResponse.ok) {
+            safeLog("error", `Failed to fetch option expirations: ${expirationsResponse.statusText} with params: ${searchParams.toString()}`);
+            throw new Error(`Failed to fetch option expirations: ${expirationsResponse.statusText} when using params: ${searchParams.toString()}`);
+        }
+        const expirationsData = (await expirationsResponse.json());
+        safeLog("debug", `Option expirations data structure: ${JSON.stringify(Object.keys(expirationsData))}`);
+        const expirations = expirationsData.expirations;
+        if (!expirations) {
+            safeLog("error", `Option expirations response missing 'expirations' property: ${JSON.stringify(expirationsData)}`);
+        }
+        responseData = { expirations };
+    }
     if (request.params.name === "find-options-chain") {
         const params = request.params.arguments;
         safeLog("info", `Options chain request parameters: ${JSON.stringify(params)}`);

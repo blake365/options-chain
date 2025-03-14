@@ -65,7 +65,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 			{
 				name: "find-options-chain",
 				description:
-					"Query the Tradier API to find options chains based on a symbol on a given expiration date. Limits the results to options with volume, bid, and ask greater than 0.10 and strikes within a percentage of the current price",
+					"Query the Tradier API to find options chains based on a symbol on a given expiration date. Limits the results to options with volume, bid, and ask greater than 0.10 and strikes within a percentage of the current price. If nothing is found, the tool will return null which could indicate that the symbol or the expiration date is not valid.",
 				inputSchema: {
 					type: "object",
 					properties: {
@@ -136,6 +136,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 							enum: ["all", "open"],
 							default: "all",
 							optional: true,
+						},
+					},
+				},
+			},
+			{
+				name: "find-option-expirations",
+				description:
+					"Query the Tradier API to find all option expirations for a given symbol. This is useful for finding expiration dates that can be used in the find-options-chain tool.",
+				inputSchema: {
+					type: "object",
+					properties: {
+						symbol: {
+							type: "string",
+							description:
+								"The underlying symbol to find option expirations for",
 						},
 					},
 				},
@@ -301,10 +316,79 @@ interface HistoricalPricesParams {
 	session_filter: string;
 }
 
+interface FindOptionExpirationsParams {
+	symbol: string;
+}
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
 	safeLog("info", `Tool request received: ${request.params.name}`);
 
 	let responseData: OptionsChainResult | Record<string, unknown> | null = null;
+
+	if (request.params.name === "find-option-expirations") {
+		const params = request.params
+			.arguments as unknown as FindOptionExpirationsParams;
+
+		safeLog(
+			"info",
+			`Find option expirations request parameters: ${JSON.stringify(params)}`,
+		);
+
+		const searchParams = new URLSearchParams();
+		if (params.symbol) searchParams.append("symbol", params.symbol);
+		searchParams.append("includeAllRoots", "true");
+		searchParams.append("expirationType", "true");
+
+		const expirationsUrl = `https://sandbox.tradier.com/v1/markets/options/expirations?${searchParams.toString()}`;
+
+		safeLog("info", `Fetching option expirations with URL: ${expirationsUrl}`);
+
+		const expirationsResponse = await fetch(expirationsUrl, {
+			method: "GET",
+			headers: {
+				Authorization: `Bearer ${process.env.token}`,
+				Accept: "application/json",
+			},
+		});
+
+		safeLog(
+			"debug",
+			`Option expirations API response status: ${expirationsResponse.status} ${expirationsResponse.statusText}`,
+		);
+
+		if (!expirationsResponse.ok) {
+			safeLog(
+				"error",
+				`Failed to fetch option expirations: ${expirationsResponse.statusText} with params: ${searchParams.toString()}`,
+			);
+
+			throw new Error(
+				`Failed to fetch option expirations: ${expirationsResponse.statusText} when using params: ${searchParams.toString()}`,
+			);
+		}
+
+		const expirationsData = (await expirationsResponse.json()) as Record<
+			string,
+			unknown
+		>;
+		safeLog(
+			"debug",
+			`Option expirations data structure: ${JSON.stringify(Object.keys(expirationsData))}`,
+		);
+
+		const expirations = expirationsData.expirations as
+			| Record<string, unknown>
+			| undefined;
+
+		if (!expirations) {
+			safeLog(
+				"error",
+				`Option expirations response missing 'expirations' property: ${JSON.stringify(expirationsData)}`,
+			);
+		}
+
+		responseData = { expirations };
+	}
 
 	if (request.params.name === "find-options-chain") {
 		const params = request.params.arguments as unknown as OptionsChainParams;
