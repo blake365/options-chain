@@ -5,7 +5,6 @@ import {
 	CallToolRequestSchema,
 	ListPromptsRequestSchema,
 	ListToolsRequestSchema,
-	ListRootsRequestSchema,
 	ListResourcesRequestSchema,
 	ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
@@ -17,7 +16,6 @@ const server = new Server(
 		capabilities: {
 			tools: {},
 			prompts: {},
-			roots: {},
 			resources: {},
 			logging: {},
 		},
