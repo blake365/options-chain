@@ -12,6 +12,12 @@
 			}
 		]
 	},
+	"kv_namespaces": [
+		{
+			"binding": "OAUTH_KV",
+			"id": "ce1e6bc5bf9f419aac2673e9b95371a1"
+		}
+	],
 	"migrations": [
 		{
 			"tag": "v1",

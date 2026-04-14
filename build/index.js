@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createProvider } from "./providers/factory.js";
 import { registerTools } from "./tools.js";
-const server = new McpServer({ name: "options-chain", version: "1.0.1" }, { capabilities: { tools: {}, logging: {} } });
+const server = new McpServer({ name: "options-chain", version: "1.2.0" }, { capabilities: { tools: {}, logging: {} } });
 const safeLog = (level, data) => {
     try {
         server.server.sendLoggingMessage({ level, data });
@@ -11,11 +12,15 @@ const safeLog = (level, data) => {
         // pre-connect or protocol mismatch — swallow
     }
 };
-const token = process.env.TRADIER_TOKEN ?? process.env.token;
-if (!token) {
+let provider;
+try {
+    provider = createProvider(process.env);
+}
+catch (err) {
+    // no valid credentials — exit silently (stdio protocol can't log pre-connect)
     process.exit(1);
 }
-registerTools(server, { token }, safeLog);
+registerTools(server, provider, safeLog);
 async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);

@@ -1,27 +1,23 @@
 # options-chain-mcp
-Claude MCP server for Tradier Sandbox API options chain endpoint and historical prices endpoint.
-
-An MCP server implementation for providing access to the [Tradier Sandbox API](https://documentation.tradier.com/brokerage-api) within [Claude Desktop](https://claude.ai/download).
+Read-only MCP server for options research. Pluggable data provider — currently supports [Tradier](https://documentation.tradier.com/brokerage-api) and [Alpaca](https://docs.alpaca.markets).
 
 ## Overview
 
-This Model Context Protocol (MCP) server enables AI assistants and applications to:
+This Model Context Protocol (MCP) server gives AI assistants the tools to research options, without any ability to place trades:
 
-- Get options chain data for a specific stock and expiration date
-- Filter for only call or put options, or both as default
-- Filter for a percentage range around the current price
-- Automatically filters for significant strikes to limit context size
-- Get historical prices for a specific stock or option contract in a given time range
-- Look up valid option expiration dates for a given symbol
+- **`find-options-chain`** — chain for a symbol + expiration, filtered to options with real volume/bid/ask and strikes within a percentage of spot. Automatically trims to significant strikes to keep the payload LLM-friendly.
+- **`find-option-expirations`** — valid expiration dates for an underlying.
+- **`get-quote`** — latest quote for a stock symbol or a single OCC option contract. Includes Greeks + IV when the provider supports them (Alpaca does; Tradier requires a chain lookup).
+- **`historical-prices`** — OHLCV bars for a stock or OCC option over any range and interval.
 
-The server can run two ways:
+The server runs two ways:
 
-- **Locally over stdio** for Claude Desktop (the original setup)
-- **Remotely on Cloudflare Workers** for Claude.ai web / desktop via the custom connector UI
+- **Locally over stdio** for Claude Desktop
+- **Remotely on Cloudflare Workers** with OAuth 2.1, for Claude.ai and other MCP clients that speak the remote-connector protocol
 
 Please note:
-- Requires Tradier account and sandbox API access token
-- Sandbox API market data is delayed by 15 minutes
+- Requires API credentials for whichever provider you use (free paper/sandbox accounts work)
+- Market data on free plans is typically 15-min delayed
 - Intended for informational purposes only
 
 Users can run queries using natural language.
@@ -109,14 +105,35 @@ If you want to make changes to the server you can do so by editing the `src/inde
 - Quit and restart Claude Desktop after making changes
 
 
-## Connecting with Claude Desktop
+## Choosing a data provider
+
+The server supports two providers. Set the credentials for whichever you want and (optionally) `DATA_PROVIDER` to pick explicitly. If `DATA_PROVIDER` is unset, Alpaca is used when both Alpaca keys are set, otherwise Tradier.
+
+| Provider | Env vars | Notes |
+| --- | --- | --- |
+| Tradier sandbox | `TRADIER_TOKEN` | 15-min delayed. Sandbox tokens expire — [dashboard](https://sandbox.tradier.com) lets you regenerate. |
+| Alpaca | `ALPACA_API_KEY_ID`, `ALPACA_SECRET_KEY` | Paper account key works fine. Free `indicative` options feed includes Greeks + IV. |
+
+See `sample.env` for optional overrides (feed selection, base-URL overrides for live accounts).
+
+### Provider differences worth knowing
+
+| Field | Tradier | Alpaca |
+| --- | --- | --- |
+| `volume` (per option) | Daily total | `null` — not exposed by the snapshot endpoint |
+| `open_interest` | Returned natively | Fetched from the trading API's contracts endpoint and merged in |
+| Greeks + IV on free tier | Yes (when `greeks=true`) | Yes (free `indicative` feed) |
+
+The chain filter treats `volume > 0 OR open_interest > 0` as "real market interest," so dead strikes get dropped on either provider. When you see `"volume": null` in an Alpaca response, that means *the provider doesn't report it* — not that the contract is inactive. Use `open_interest` for liquidity assessments on Alpaca.
+
+## Connecting with Claude Desktop (stdio)
 
 1. Open your Claude Desktop configuration at:
    - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
    - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
-2. Add the server configuration:
-```json 
+2. Add the server configuration (using whichever provider you want):
+```json
 {
     "mcpServers": {
         "options-chain": {
@@ -125,10 +142,18 @@ If you want to make changes to the server you can do so by editing the `src/inde
                 "/Full/Route/to/Folder/options-chain/build/index.js"
             ],
             "env": {
-                "token": "your_sandbox_api_token_here"
+                "TRADIER_TOKEN": "your_tradier_sandbox_token"
             }
         }
     }
+}
+```
+
+Or for Alpaca:
+```json
+"env": {
+    "ALPACA_API_KEY_ID": "your_key_id",
+    "ALPACA_SECRET_KEY": "your_secret"
 }
 ```
 
@@ -136,25 +161,39 @@ If you want to make changes to the server you can do so by editing the `src/inde
 
 Once you restart you should see a small hammer icon in the lower right corner of the textbox. If you hover over the icon you'll see the number of MCP tools available.
 
-> The `token` env var is still accepted for backward compatibility. New installs should prefer `TRADIER_TOKEN`.
+> The legacy lowercase `token` env var is still accepted for backward compatibility with older configs.
 
-## Running on Cloudflare Workers
+## Running on Cloudflare Workers (remote, OAuth 2.1)
 
-The Worker entrypoint (`src/worker.ts`) exposes the same tools over MCP's Streamable HTTP / SSE transports, so Claude.ai (web and desktop) can connect to it as a custom remote connector.
+The Worker entrypoint (`src/worker.ts`) exposes the same tools over MCP's SSE and Streamable HTTP transports, wrapped in an OAuth 2.1 provider. Claude.ai (web and desktop) discovers the endpoints automatically via Dynamic Client Registration.
 
 ### Requirements
 
-- A Cloudflare account on any paid Workers plan (the Durable Object that backs MCP session state requires paid)
+- A Cloudflare account on any paid Workers plan (Durable Objects are used for MCP session state)
 - Wrangler authenticated: `npx wrangler login`
+- A KV namespace bound as `OAUTH_KV` (create with `npx wrangler kv namespace create OAUTH_KV` and paste the ID into `wrangler.jsonc`)
 
 ### Configure secrets
 
+For Tradier:
 ```bash
-npx wrangler secret put TRADIER_TOKEN     # your Tradier sandbox token
-npx wrangler secret put MCP_AUTH_TOKEN    # any long random string, e.g. `openssl rand -hex 32`
+npx wrangler secret put TRADIER_TOKEN
 ```
 
-For local dev, put the same two keys in a `.dev.vars` file at the repo root (gitignored).
+For Alpaca:
+```bash
+npx wrangler secret put ALPACA_API_KEY_ID
+npx wrangler secret put ALPACA_SECRET_KEY
+# optional:
+npx wrangler secret put DATA_PROVIDER            # "alpaca" or "tradier"
+```
+
+And the auth passcode that gates the consent page:
+```bash
+npx wrangler secret put APPROVE_PASSCODE         # e.g. `openssl rand -base64 18`
+```
+
+For local dev, put the same keys in a `.dev.vars` file at the repo root (gitignored).
 
 ### Deploy
 
@@ -167,14 +206,14 @@ npm run deploy    # publish to <name>.<account>.workers.dev
 
 In Claude.ai → Settings → Connectors → Add custom connector:
 
-- URL: `https://<your-worker>.workers.dev/sse` (use `/mcp` if your client uses Streamable HTTP instead of SSE)
-- Custom header: `Authorization: Bearer <the MCP_AUTH_TOKEN you set above>`
-
-Any request without that header is rejected with a 401, so the Worker is safe to leave public.
+1. URL: `https://<your-worker>.workers.dev/sse` (or `/mcp` for Streamable HTTP).
+2. Leave client ID/secret blank — the server advertises Dynamic Client Registration.
+3. Save and click connect. Claude opens a consent page; enter the `APPROVE_PASSCODE` you set above.
+4. You'll be redirected back, authorized. Tokens refresh for 30 days.
 
 ### Auth upgrade path
 
-For multi-user access or SSO, put **Cloudflare Access** in front of the Worker route — no code changes needed. The existing bearer check becomes a harmless second layer.
+For multi-user access or SSO, put **Cloudflare Access** in front of the Worker route. The OAuth flow still works for the MCP client; Access just adds a second layer for the human consent page.
 
 ## Troubleshooting
 

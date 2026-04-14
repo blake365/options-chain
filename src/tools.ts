@@ -1,5 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type {
+	MarketDataProvider,
+	OptionData,
+	OptionsChainResult,
+} from "./providers/types.js";
 
 export type LogFn = (
 	level: "info" | "error" | "debug" | "warning",
@@ -8,70 +13,19 @@ export type LogFn = (
 
 const noopLog: LogFn = () => {};
 
-export interface ToolEnv {
-	token: string;
-}
-
-interface GreeksData {
-	delta: number;
-	gamma: number;
-	theta: number;
-	vega: number;
-	mid_iv: number;
-}
-
-interface OptionData {
-	symbol: string;
-	description: string;
-	last: number | null;
-	volume: number;
-	bid: number;
-	ask: number;
-	underlying: string;
-	strike: number;
-	change_percentage: number | null;
-	open_interest: number;
-	expiration_date: string;
-	option_type: string;
-	greeks?: GreeksData;
-}
-
-const TRADIER_BASE = "https://sandbox.tradier.com/v1";
-
-function authHeaders(token: string) {
-	return {
-		Authorization: `Bearer ${token}`,
-		Accept: "application/json",
-	};
-}
-
-function filterStrikesByPercentage(
-	underlyingPrice: number,
-	percentage: number,
-): { lowerBound: number; upperBound: number } {
-	return {
-		lowerBound: underlyingPrice * (1 - percentage / 100),
-		upperBound: underlyingPrice * (1 + percentage / 100),
-	};
-}
-
 function filterSignificantStrikePrices(
 	underlyingPrice: number,
 	percentage: number,
 	strikePrices: number[],
 ): number[] {
-	const { lowerBound, upperBound } = filterStrikesByPercentage(
-		underlyingPrice,
-		percentage,
-	);
-
+	const lowerBound = underlyingPrice * (1 - percentage / 100);
+	const upperBound = underlyingPrice * (1 + percentage / 100);
 	const sorted = [...strikePrices].sort((a, b) => a - b);
-	const withDistance = sorted.map((strike) => ({
-		strike,
-		distance: Math.abs((strike - underlyingPrice) / underlyingPrice) * 100,
-	}));
-
-	return withDistance
+	return sorted
+		.map((strike) => ({
+			strike,
+			distance: Math.abs((strike - underlyingPrice) / underlyingPrice) * 100,
+		}))
 		.filter(({ strike }) => strike >= lowerBound && strike <= upperBound)
 		.filter(({ strike, distance }) => {
 			if (distance <= 2) return true;
@@ -95,6 +49,36 @@ function filterSignificantStrikePrices(
 		.map(({ strike }) => strike);
 }
 
+function filterChainForLlm(
+	chain: OptionsChainResult,
+	opts: {
+		option_type: "call" | "put" | "both";
+		strike_percentage: number;
+	},
+): OptionData[] {
+	const quality = chain.options.filter((o) => {
+		if (opts.option_type === "call" && o.option_type !== "call") return false;
+		if (opts.option_type === "put" && o.option_type !== "put") return false;
+		// "Real market interest" — volume for Tradier (daily total), open
+		// interest for Alpaca (its snapshot has no daily volume; volume is
+		// null there). Either signal is enough to keep the strike.
+		const hasInterest = (o.volume ?? 0) > 0 || o.open_interest > 0;
+		return hasInterest && o.bid > 0.1 && o.ask > 0.1;
+	});
+
+	if (chain.underlying_price <= 0) return quality;
+
+	const pct = Math.max(0, Math.min(100, opts.strike_percentage));
+	const significant = new Set(
+		filterSignificantStrikePrices(
+			chain.underlying_price,
+			pct,
+			quality.map((o) => o.strike),
+		),
+	);
+	return quality.filter((o) => significant.has(o.strike));
+}
+
 function asText(data: unknown) {
 	return {
 		content: [
@@ -105,200 +89,103 @@ function asText(data: unknown) {
 
 export function registerTools(
 	server: McpServer,
-	env: ToolEnv,
+	provider: MarketDataProvider,
 	log: LogFn = noopLog,
 ) {
 	server.tool(
 		"find-options-chain",
-		"Query the Tradier API to find options chains based on a symbol on a given expiration date. Limits the results to options with volume, bid, and ask greater than 0.10 and strikes within a percentage of the current price. If nothing is found, the tool will return null which could indicate that the symbol or the expiration date is not valid.",
+		"Query the data provider for the options chain of a symbol on a specific expiration date. The result is filtered to options with volume, bid, and ask greater than 0.10 and strikes within a configurable percentage of the underlying price. If nothing is found the result may be empty — check that the symbol and expiration are valid.",
 		{
-			symbol: z.string().describe("The symbol to find options chains for"),
+			symbol: z.string().describe("The underlying symbol"),
 			expiration: z
 				.string()
-				.describe(
-					"The expiration date to find options chains for formatted as YYYY-MM-DD",
-				),
+				.describe("Expiration date formatted as YYYY-MM-DD"),
 			greeks: z
 				.boolean()
 				.default(true)
-				.describe("Whether to include greeks in the response"),
+				.describe("Whether to include greeks/IV in the response"),
 			option_type: z
 				.enum(["call", "put", "both"])
 				.default("both")
-				.describe("The option type to filter by"),
+				.describe("Filter by option type"),
 			strike_percentage: z
 				.number()
 				.default(10)
-				.describe("The percentage of the current price to filter strikes by"),
+				.describe(
+					"Percentage distance from the underlying price to include strikes (e.g. 10 = ±10%)",
+				),
 		},
 		async (args) => {
 			log("info", `find-options-chain: ${JSON.stringify(args)}`);
-
-			if (!env.token) throw new Error("Tradier API token is missing.");
-
-			const quoteUrl = `${TRADIER_BASE}/markets/quotes?symbols=${encodeURIComponent(args.symbol)}`;
-			const quoteRes = await fetch(quoteUrl, {
-				headers: authHeaders(env.token),
-			});
-			if (!quoteRes.ok)
-				throw new Error(
-					`Failed to fetch quote: ${quoteRes.status} ${quoteRes.statusText}`,
-				);
-			const quoteData = (await quoteRes.json()) as Record<string, unknown>;
-			const quotes = quoteData.quotes as Record<string, unknown> | undefined;
-			const quoteArray = Array.isArray(quotes?.quote)
-				? (quotes?.quote as Record<string, unknown>[])
-				: ([quotes?.quote] as Record<string, unknown>[]);
-			const currentPrice = (quoteArray[0]?.last as number) || 0;
-			log("info", `current price for ${args.symbol}: ${currentPrice}`);
-
-			const chainParams = new URLSearchParams({
-				symbol: args.symbol,
-				expiration: args.expiration,
-				greeks: String(args.greeks),
-			});
-			const chainUrl = `${TRADIER_BASE}/markets/options/chains?${chainParams}`;
-			const chainRes = await fetch(chainUrl, {
-				headers: authHeaders(env.token),
-			});
-			if (!chainRes.ok)
-				throw new Error(
-					`Failed to fetch options chain: ${chainRes.status} ${chainRes.statusText}`,
-				);
-			const chainData = (await chainRes.json()) as Record<string, unknown>;
-			const optionsObj = chainData.options as
-				| Record<string, unknown>
-				| undefined;
-			const rawOptions = (optionsObj?.option as unknown[]) || [];
-
-			const mapped: OptionData[] = rawOptions.map((raw) => {
-				const o = raw as Record<string, unknown>;
-				const m: OptionData = {
-					symbol: (o.symbol as string) || "",
-					description: (o.description as string) || "",
-					last: o.last as number | null,
-					volume: (o.volume as number) || 0,
-					bid: (o.bid as number) || 0,
-					ask: (o.ask as number) || 0,
-					underlying: (o.underlying as string) || "",
-					strike: (o.strike as number) || 0,
-					change_percentage: o.change_percentage as number | null,
-					open_interest: (o.open_interest as number) || 0,
-					expiration_date: (o.expiration_date as string) || "",
-					option_type: (o.option_type as string) || "",
-				};
-				if (o.greeks) {
-					const g = o.greeks as Record<string, unknown>;
-					m.greeks = {
-						delta: (g.delta as number) || 0,
-						gamma: (g.gamma as number) || 0,
-						theta: (g.theta as number) || 0,
-						vega: (g.vega as number) || 0,
-						mid_iv: (g.mid_iv as number) || 0,
-					};
-				}
-				return m;
-			});
-
-			const qualityFiltered = mapped.filter((o) => {
-				if (args.option_type === "call" && o.option_type !== "call")
-					return false;
-				if (args.option_type === "put" && o.option_type !== "put") return false;
-				return o.volume > 0 && o.bid > 0.1 && o.ask > 0.1;
-			});
-
-			const strikePct = Math.max(0, Math.min(100, args.strike_percentage));
-			const significant = filterSignificantStrikePrices(
-				currentPrice,
-				strikePct,
-				qualityFiltered.map((o) => o.strike),
+			const chain = await provider.getOptionsChain(args);
+			const filtered = filterChainForLlm(chain, args);
+			log(
+				"info",
+				`returning ${filtered.length} options (underlying ${chain.underlying_price})`,
 			);
-			const filtered = qualityFiltered.filter((o) =>
-				significant.includes(o.strike),
-			);
-
-			log("info", `returning ${filtered.length} options`);
-			return asText({ option: filtered });
+			return asText({
+				underlying_price: chain.underlying_price,
+				option: filtered,
+			});
 		},
 	);
 
 	server.tool(
 		"historical-prices",
-		"Query the Tradier API to find historical prices for a given symbol or option contract on in a given time range",
+		"Historical OHLCV bars for a stock symbol or OCC option contract over a time range.",
 		{
 			symbol: z
 				.string()
 				.describe(
-					"The symbol to find historical prices for either a stock or an option contract. You can fetch historical pricing for options by passing the OCC option symbol (ex. AAPL220617C00270000) as the symbol. Use longer intervals for longer time ranges.",
+					"Stock symbol or OCC option contract (e.g. AAPL or AAPL250117C00150000). Use longer intervals for longer ranges.",
 				),
 			interval: z
 				.enum(["daily", "weekly", "monthly"])
 				.default("daily")
-				.describe("Interval of time per timesale."),
-			start: z
-				.string()
-				.describe(
-					"The start date of the time range to fetch historical prices for in YYYY-MM-DD format",
-				),
-			end: z
-				.string()
-				.describe(
-					"The end date of the time range to fetch historical prices for in YYYY-MM-DD format",
-				),
+				.describe("Bar interval"),
+			start: z.string().describe("Start date in YYYY-MM-DD"),
+			end: z.string().describe("End date in YYYY-MM-DD"),
 			session_filter: z
 				.enum(["all", "open"])
 				.default("all")
 				.describe(
-					"Specify to retrieve aggregate data for all hours of the day (all) or only regular trading sessions (open).",
+					"Include extended-hours bars (all) or regular sessions only (open). Applies only to Tradier; Alpaca ignores this.",
 				),
 		},
 		async (args) => {
 			log("info", `historical-prices: ${JSON.stringify(args)}`);
-			if (!env.token) throw new Error("Tradier API token is missing.");
-
-			const params = new URLSearchParams({
-				symbol: args.symbol,
-				interval: args.interval,
-				start: args.start,
-				end: args.end,
-				session_filter: args.session_filter,
-			});
-			const url = `${TRADIER_BASE}/markets/history?${params}`;
-			const res = await fetch(url, { headers: authHeaders(env.token) });
-			if (!res.ok)
-				throw new Error(
-					`Failed to fetch historical prices: ${res.status} ${res.statusText}`,
-				);
-			const data = (await res.json()) as Record<string, unknown>;
-			return asText(data);
+			const result = await provider.getHistoricalPrices(args);
+			return asText(result);
 		},
 	);
 
 	server.tool(
 		"find-option-expirations",
-		"Query the Tradier API to find all option expirations for a given symbol. This is useful for finding expiration dates that can be used in the find-options-chain tool.",
+		"List valid option expiration dates for an underlying symbol.",
 		{
-			symbol: z
-				.string()
-				.describe("The underlying symbol to find option expirations for"),
+			symbol: z.string().describe("Underlying symbol"),
 		},
 		async (args) => {
 			log("info", `find-option-expirations: ${JSON.stringify(args)}`);
-			if (!env.token) throw new Error("Tradier API token is missing.");
+			const expirations = await provider.getOptionExpirations(args.symbol);
+			return asText({ expirations });
+		},
+	);
 
-			const params = new URLSearchParams({
-				symbol: args.symbol,
-				includeAllRoots: "true",
-				expirationType: "true",
-			});
-			const url = `${TRADIER_BASE}/markets/options/expirations?${params}`;
-			const res = await fetch(url, { headers: authHeaders(env.token) });
-			if (!res.ok)
-				throw new Error(
-					`Failed to fetch option expirations: ${res.status} ${res.statusText}`,
-				);
-			const data = (await res.json()) as Record<string, unknown>;
-			return asText({ expirations: data.expirations });
+	server.tool(
+		"get-quote",
+		"Get the latest quote for a stock symbol or single OCC option contract. For option symbols the response includes Greeks and implied volatility when the provider supports it.",
+		{
+			symbol: z
+				.string()
+				.describe(
+					"Stock symbol (e.g. AAPL) or OCC option contract (e.g. AAPL250117C00150000).",
+				),
+		},
+		async (args) => {
+			log("info", `get-quote: ${JSON.stringify(args)}`);
+			const quote = await provider.getQuote(args.symbol, { greeks: true });
+			return asText(quote);
 		},
 	);
 }

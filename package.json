@@ -30,6 +30,7 @@
 	"license": "MIT",
 	"description": "MCP server for Tradier Sandbox options chain endpoint — runs locally over stdio or remotely on Cloudflare Workers",
 	"dependencies": {
+		"@cloudflare/workers-oauth-provider": "^0.4.0",
 		"@modelcontextprotocol/sdk": "^1.25.2",
 		"agents": "^0.0.100",
 		"zod": "^4.3.5"
