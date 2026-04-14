@@ -1,6 +1,6 @@
 {
 	"name": "options-chain-mcp",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"main": "index.js",
 	"type": "module",
 	"bin": {
@@ -8,7 +8,10 @@
 	},
 	"scripts": {
 		"test": "echo \"Error: no test specified\" && exit 1",
-		"build": "tsc && node -e \"const fs = require('fs'); const content = fs.readFileSync('build/index.js', 'utf8'); fs.writeFileSync('build/index.js', '#!/usr/bin/env node\\n' + content); fs.chmodSync('build/index.js', '755');\""
+		"build": "tsc -p tsconfig.stdio.json && node -e \"const fs = require('fs'); const content = fs.readFileSync('build/index.js', 'utf8'); fs.writeFileSync('build/index.js', '#!/usr/bin/env node\\n' + content); fs.chmodSync('build/index.js', '755');\"",
+		"dev": "wrangler dev",
+		"deploy": "wrangler deploy",
+		"typecheck": "tsc --noEmit"
 	},
 	"files": [
 		"build"
@@ -19,16 +22,22 @@
 		"mcp",
 		"tradier",
 		"sandbox",
-		"api"
+		"api",
+		"cloudflare",
+		"workers"
 	],
 	"author": "Blake Morgan",
 	"license": "MIT",
-	"description": "Claude MCP server for Tradier Sandbox API options chain endpoint",
+	"description": "MCP server for Tradier Sandbox options chain endpoint — runs locally over stdio or remotely on Cloudflare Workers",
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "^1.25.2",
-		"@types/node": "^22.10.2",
-		"node-fetch": "^3.3.2",
-		"typescript": "^5.7.2",
+		"agents": "^0.0.100",
 		"zod": "^4.3.5"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20250410.0",
+		"@types/node": "^22.10.2",
+		"typescript": "^5.7.2",
+		"wrangler": "^4.10.0"
 	}
 }

@@ -12,6 +12,12 @@ This Model Context Protocol (MCP) server enables AI assistants and applications 
 - Filter for a percentage range around the current price
 - Automatically filters for significant strikes to limit context size
 - Get historical prices for a specific stock or option contract in a given time range
+- Look up valid option expiration dates for a given symbol
+
+The server can run two ways:
+
+- **Locally over stdio** for Claude Desktop (the original setup)
+- **Remotely on Cloudflare Workers** for Claude.ai web / desktop via the custom connector UI
 
 Please note:
 - Requires Tradier account and sandbox API access token
@@ -129,6 +135,46 @@ If you want to make changes to the server you can do so by editing the `src/inde
 3. Close/Quit then restart Claude Desktop
 
 Once you restart you should see a small hammer icon in the lower right corner of the textbox. If you hover over the icon you'll see the number of MCP tools available.
+
+> The `token` env var is still accepted for backward compatibility. New installs should prefer `TRADIER_TOKEN`.
+
+## Running on Cloudflare Workers
+
+The Worker entrypoint (`src/worker.ts`) exposes the same tools over MCP's Streamable HTTP / SSE transports, so Claude.ai (web and desktop) can connect to it as a custom remote connector.
+
+### Requirements
+
+- A Cloudflare account on any paid Workers plan (the Durable Object that backs MCP session state requires paid)
+- Wrangler authenticated: `npx wrangler login`
+
+### Configure secrets
+
+```bash
+npx wrangler secret put TRADIER_TOKEN     # your Tradier sandbox token
+npx wrangler secret put MCP_AUTH_TOKEN    # any long random string, e.g. `openssl rand -hex 32`
+```
+
+For local dev, put the same two keys in a `.dev.vars` file at the repo root (gitignored).
+
+### Deploy
+
+```bash
+npm run dev       # local dev server with hot reload
+npm run deploy    # publish to <name>.<account>.workers.dev
+```
+
+### Connect Claude to the deployed server
+
+In Claude.ai → Settings → Connectors → Add custom connector:
+
+- URL: `https://<your-worker>.workers.dev/sse` (use `/mcp` if your client uses Streamable HTTP instead of SSE)
+- Custom header: `Authorization: Bearer <the MCP_AUTH_TOKEN you set above>`
+
+Any request without that header is rejected with a 401, so the Worker is safe to leave public.
+
+### Auth upgrade path
+
+For multi-user access or SSO, put **Cloudflare Access** in front of the Worker route — no code changes needed. The existing bearer check becomes a harmless second layer.
 
 ## Troubleshooting
 
