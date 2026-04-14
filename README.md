@@ -22,6 +22,23 @@ Please note:
 
 Users can run queries using natural language.
 
+## Why this server (instead of the official Tradier or Alpaca MCP)
+
+**Built for LLM context budgets.** A typical underlying has hundreds of strikes across dozens of expirations. Calling a raw `get_option_chain` from the official Alpaca server returns *all of them* — every dead far-OTM strike, every penny-bid contract, every field the API exposes. That payload eats thousands of tokens per call and forces the model to filter the noise itself. This server filters server-side:
+
+- Strikes are pre-filtered to a configurable percentage band around spot
+- Dead contracts are dropped (`volume > 0 OR open_interest > 0` and `bid/ask > $0.10`)
+- A "significant strikes" pass keeps round-numbered strikes at distance and finer-grained strikes near the money — mimicking how a human trader actually reads a chain
+- Only the fields a research workflow needs are returned (no exchange codes, no raw timestamps, no boilerplate)
+
+In practice a NVDA chain comes back as ~15 strikes instead of ~400 — roughly **20–40× fewer tokens per call**, leaving room for actual analysis in the conversation.
+
+**Other things going for it:**
+
+- **Read-only by design.** No `place_order`, no `close_position`, no `exercise_options_position`. Point an LLM at it without worrying about hallucinated trades.
+- **Provider-pluggable.** Tradier and Alpaca behind one identical tool surface. Swap with one env var; if one provider's data goes stale or the account expires, fall over to the other without changing prompts or client config.
+- **Remote OAuth deployment included.** Works from claude.ai web (and any other OAuth-aware MCP client), not just locally-connected Claude Desktop. The official Alpaca server is stdio-only.
+
 ## Sample Output
 
 **Q: What are the highlights of the SPY options chain for two weeks out?**
