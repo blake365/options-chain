@@ -1,44 +1,64 @@
 {
 	"name": "options-chain-mcp",
-	"version": "1.1.0",
-	"main": "index.js",
+	"version": "1.2.0",
+	"description": "Options Chain MCP Server - options chains, quotes, expirations, and historical prices via Tradier or Alpaca",
 	"type": "module",
+	"main": "./build/index.js",
+	"engines": {
+		"node": ">=20"
+	},
 	"bin": {
-		"options-chain-mcp": "./build/index.js"
+		"options-chain-mcp": "build/index.js"
 	},
 	"scripts": {
-		"test": "echo \"Error: no test specified\" && exit 1",
-		"build": "tsc -p tsconfig.stdio.json && node -e \"const fs = require('fs'); const content = fs.readFileSync('build/index.js', 'utf8'); fs.writeFileSync('build/index.js', '#!/usr/bin/env node\\n' + content); fs.chmodSync('build/index.js', '755');\"",
+		"build": "tsc -p tsconfig.stdio.json && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
+		"dev:stdio": "tsx src/index.ts",
 		"dev": "wrangler dev",
 		"deploy": "wrangler deploy",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"prepublishOnly": "npm run build",
+		"test": "echo \"Error: no test specified\" && exit 1"
 	},
 	"files": [
-		"build"
+		"build",
+		"README.md",
+		"LICENSE"
 	],
 	"keywords": [
 		"options",
-		"chain",
-		"mcp",
+		"options-chain",
+		"stocks",
+		"quotes",
+		"greeks",
 		"tradier",
-		"sandbox",
-		"api",
-		"cloudflare",
-		"workers"
+		"alpaca",
+		"finance",
+		"mcp",
+		"modelcontextprotocol",
+		"mcp-server",
+		"claude"
 	],
 	"author": "Blake Morgan",
 	"license": "MIT",
-	"description": "MCP server for Tradier Sandbox options chain endpoint — runs locally over stdio or remotely on Cloudflare Workers",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/blake365/options-chain.git"
+	},
+	"homepage": "https://github.com/blake365/options-chain#readme",
+	"bugs": {
+		"url": "https://github.com/blake365/options-chain/issues"
+	},
 	"dependencies": {
 		"@cloudflare/workers-oauth-provider": "^0.4.0",
-		"@modelcontextprotocol/sdk": "^1.25.2",
+		"@modelcontextprotocol/sdk": "^1.30.0",
 		"agents": "^0.0.100",
-		"zod": "^4.3.5"
+		"zod": "^4.4.3"
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "^4.20250410.0",
-		"@types/node": "^22.10.2",
-		"typescript": "^5.7.2",
-		"wrangler": "^4.10.0"
+		"@cloudflare/workers-types": "^4.20260702.1",
+		"@types/node": "^22.20.1",
+		"tsx": "^4.23.11",
+		"typescript": "^5.9.3",
+		"wrangler": "~4.82.2"
 	}
 }

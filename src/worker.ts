@@ -6,6 +6,7 @@ import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createProvider } from "./providers/factory.js";
 import { registerTools } from "./tools.js";
+import { SERVER_NAME, SERVER_VERSION } from "./version.js";
 
 export interface Env {
 	DATA_PROVIDER?: string;
@@ -26,7 +27,7 @@ type Props = { userId: string };
 
 export class OptionsChainMCP extends McpAgent<Env, unknown, Props> {
 	server = new McpServer(
-		{ name: "options-chain", version: "1.2.0" },
+		{ name: SERVER_NAME, version: SERVER_VERSION },
 		{ capabilities: { tools: {}, logging: {} } },
 	);
 

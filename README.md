@@ -108,18 +108,27 @@ Current SPY price appears to be around $565-566 based on the at-the-money option
 
 ## Installation
 
-Installing this might be tricky if you're not familiar with Node.js and the MCP protocol.
+Requires [Node.js](https://nodejs.org/en/download) 20 or newer. No install step is
+needed — `npx` fetches the server on first run. You only need credentials for one of
+the two data providers (see below).
 
-1. Install [Node.js](https://nodejs.org/en/download)
-2. Clone this repository to a folder on your local machine
-3. The server is already built so you can skip the build step.
+### Development
 
-### Extra Steps
+```bash
+npm install        # install dependencies
+npm run dev:stdio  # run the stdio server from source
+npm run build      # compile TypeScript to build/
+npm run typecheck  # type-check both the stdio and Workers configs
+npm run dev        # run the Cloudflare Workers version locally
+npm run deploy     # deploy the Workers version
+```
 
-If you want to make changes to the server you can do so by editing the `src/index.ts` file.
-- Run `npm install` to install dependencies
-- Run `npm run build` to build the server
-- Quit and restart Claude Desktop after making changes
+Tool definitions live in `src/tools.ts` and are shared by both entry points:
+`src/index.ts` (stdio) and `src/worker.ts` (Cloudflare Workers). Provider-specific
+code lives in `src/providers/`.
+
+`build/` is generated and not checked in — run `npm run build` before pointing Claude
+Desktop at a local build.
 
 
 ## Choosing a data provider
@@ -154,10 +163,8 @@ The chain filter treats `volume > 0 OR open_interest > 0` as "real market intere
 {
     "mcpServers": {
         "options-chain": {
-            "command": "node",
-            "args": [
-                "/Full/Route/to/Folder/options-chain/build/index.js"
-            ],
+            "command": "npx",
+            "args": ["-y", "options-chain-mcp"],
             "env": {
                 "TRADIER_TOKEN": "your_tradier_sandbox_token"
             }
@@ -165,6 +172,9 @@ The chain filter treats `volume > 0 OR open_interest > 0` as "real market intere
     }
 }
 ```
+
+To run a local build instead, use `"command": "node"` with
+`"args": ["/full/path/to/options-chain/build/index.js"]` after `npm run build`.
 
 Or for Alpaca:
 ```json
@@ -234,4 +244,10 @@ For multi-user access or SSO, put **Cloudflare Access** in front of the Worker r
 
 ## Troubleshooting
 
-If you get errors when running the server you may need to provide the full path to the `node` command. For example, on macOS: `/usr/local/bin/node`
+If Claude Desktop cannot find `npx`, provide its full path (on macOS, typically
+`/usr/local/bin/npx` or `/opt/homebrew/bin/npx`). The same applies to `node` if you are
+running a local build.
+
+If the server does not appear at all, check Claude Desktop's logs — the server now
+writes a specific reason to stderr (for example, missing provider credentials) instead
+of exiting silently.

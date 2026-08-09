@@ -13,6 +13,9 @@ export type LogFn = (
 
 const noopLog: LogFn = () => {};
 
+// Every tool here is a read-only lookup against an external market data API.
+const READ_ONLY = { readOnlyHint: true, openWorldHint: true } as const;
+
 function filterSignificantStrikePrices(
 	underlyingPrice: number,
 	percentage: number,
@@ -92,28 +95,35 @@ export function registerTools(
 	provider: MarketDataProvider,
 	log: LogFn = noopLog,
 ) {
-	server.tool(
+	server.registerTool(
 		"find-options-chain",
-		"Query the data provider for the options chain of a symbol on a specific expiration date. The result is filtered to options with volume, bid, and ask greater than 0.10 and strikes within a configurable percentage of the underlying price. If nothing is found the result may be empty — check that the symbol and expiration are valid.",
 		{
-			symbol: z.string().describe("The underlying symbol"),
-			expiration: z
-				.string()
-				.describe("Expiration date formatted as YYYY-MM-DD"),
-			greeks: z
-				.boolean()
-				.default(true)
-				.describe("Whether to include greeks/IV in the response"),
-			option_type: z
-				.enum(["call", "put", "both"])
-				.default("both")
-				.describe("Filter by option type"),
-			strike_percentage: z
-				.number()
-				.default(10)
-				.describe(
-					"Percentage distance from the underlying price to include strikes (e.g. 10 = ±10%)",
-				),
+			title: "Find Options Chain",
+			description:
+				"Query the data provider for the options chain of a symbol on a specific expiration date. The result is filtered to options with volume, bid, and ask greater than 0.10 and strikes within a configurable percentage of the underlying price. If nothing is found the result may be empty — check that the symbol and expiration are valid.",
+			annotations: READ_ONLY,
+			inputSchema: {
+				symbol: z.string().describe("The underlying symbol"),
+				expiration: z
+					.string()
+					.describe("Expiration date formatted as YYYY-MM-DD"),
+				greeks: z
+					.boolean()
+					.default(true)
+					.describe("Whether to include greeks/IV in the response"),
+				option_type: z
+					.enum(["call", "put", "both"])
+					.default("both")
+					.describe("Filter by option type"),
+				strike_percentage: z
+					.number()
+					.min(0)
+					.max(100)
+					.default(10)
+					.describe(
+						"Percentage distance from the underlying price to include strikes (e.g. 10 = ±10%)",
+					),
+			},
 		},
 		async (args) => {
 			log("info", `find-options-chain: ${JSON.stringify(args)}`);
@@ -130,27 +140,32 @@ export function registerTools(
 		},
 	);
 
-	server.tool(
+	server.registerTool(
 		"historical-prices",
-		"Historical OHLCV bars for a stock symbol or OCC option contract over a time range.",
 		{
-			symbol: z
-				.string()
-				.describe(
-					"Stock symbol or OCC option contract (e.g. AAPL or AAPL250117C00150000). Use longer intervals for longer ranges.",
-				),
-			interval: z
-				.enum(["daily", "weekly", "monthly"])
-				.default("daily")
-				.describe("Bar interval"),
-			start: z.string().describe("Start date in YYYY-MM-DD"),
-			end: z.string().describe("End date in YYYY-MM-DD"),
-			session_filter: z
-				.enum(["all", "open"])
-				.default("all")
-				.describe(
-					"Include extended-hours bars (all) or regular sessions only (open). Applies only to Tradier; Alpaca ignores this.",
-				),
+			title: "Historical Prices",
+			description:
+				"Historical OHLCV bars for a stock symbol or OCC option contract over a time range.",
+			annotations: READ_ONLY,
+			inputSchema: {
+				symbol: z
+					.string()
+					.describe(
+						"Stock symbol or OCC option contract (e.g. AAPL or AAPL250117C00150000). Use longer intervals for longer ranges.",
+					),
+				interval: z
+					.enum(["daily", "weekly", "monthly"])
+					.default("daily")
+					.describe("Bar interval"),
+				start: z.string().describe("Start date in YYYY-MM-DD"),
+				end: z.string().describe("End date in YYYY-MM-DD"),
+				session_filter: z
+					.enum(["all", "open"])
+					.default("all")
+					.describe(
+						"Include extended-hours bars (all) or regular sessions only (open). Applies only to Tradier; Alpaca ignores this.",
+					),
+			},
 		},
 		async (args) => {
 			log("info", `historical-prices: ${JSON.stringify(args)}`);
@@ -159,11 +174,15 @@ export function registerTools(
 		},
 	);
 
-	server.tool(
+	server.registerTool(
 		"find-option-expirations",
-		"List valid option expiration dates for an underlying symbol.",
 		{
-			symbol: z.string().describe("Underlying symbol"),
+			title: "Find Option Expirations",
+			description: "List valid option expiration dates for an underlying symbol.",
+			annotations: READ_ONLY,
+			inputSchema: {
+				symbol: z.string().describe("Underlying symbol"),
+			},
 		},
 		async (args) => {
 			log("info", `find-option-expirations: ${JSON.stringify(args)}`);
@@ -172,15 +191,20 @@ export function registerTools(
 		},
 	);
 
-	server.tool(
+	server.registerTool(
 		"get-quote",
-		"Get the latest quote for a stock symbol or single OCC option contract. For option symbols the response includes Greeks and implied volatility when the provider supports it.",
 		{
-			symbol: z
-				.string()
-				.describe(
-					"Stock symbol (e.g. AAPL) or OCC option contract (e.g. AAPL250117C00150000).",
-				),
+			title: "Get Quote",
+			description:
+				"Get the latest quote for a stock symbol or single OCC option contract. For option symbols the response includes Greeks and implied volatility when the provider supports it.",
+			annotations: READ_ONLY,
+			inputSchema: {
+				symbol: z
+					.string()
+					.describe(
+						"Stock symbol (e.g. AAPL) or OCC option contract (e.g. AAPL250117C00150000).",
+					),
+			},
 		},
 		async (args) => {
 			log("info", `get-quote: ${JSON.stringify(args)}`);

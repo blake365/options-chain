@@ -1,8 +1,11 @@
 node_modules/
 /node_modules
+build/
 dist/
 .env
 .dev.vars
 .wrangler/
 *.log
+*.tgz
 /references
+.DS_Store

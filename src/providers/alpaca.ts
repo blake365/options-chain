@@ -10,6 +10,8 @@ import {
 	type Quote,
 } from "./types.js";
 
+import { REQUEST_TIMEOUT_MS, describeFetchError } from "./http.js";
+
 const DATA_BASE = "https://data.alpaca.markets";
 
 const INTERVAL_MAP: Record<HistoricalParams["interval"], string> = {
@@ -89,7 +91,17 @@ export class AlpacaProvider implements MarketDataProvider {
 	}
 
 	private async fetchJson(url: string): Promise<Record<string, unknown>> {
-		const res = await fetch(url, { headers: this.headers() });
+		let res: Response;
+		try {
+			res = await fetch(url, {
+				headers: this.headers(),
+				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+			});
+		} catch (error) {
+			throw new Error(
+				`Alpaca ${new URL(url).pathname}: ${describeFetchError(error)}`,
+			);
+		}
 		if (!res.ok) {
 			const body = await res.text().catch(() => "");
 			throw new Error(

@@ -11,6 +11,8 @@ import {
 	type Quote,
 } from "./types.js";
 
+import { REQUEST_TIMEOUT_MS, describeFetchError } from "./http.js";
+
 const DEFAULT_BASE = "https://sandbox.tradier.com/v1";
 
 export class TradierProvider implements MarketDataProvider {
@@ -29,12 +31,19 @@ export class TradierProvider implements MarketDataProvider {
 	}
 
 	private async fetchJson(path: string, params: URLSearchParams) {
-		const res = await fetch(`${this.baseUrl}${path}?${params}`, {
-			headers: this.headers(),
-		});
+		let res: Response;
+		try {
+			res = await fetch(`${this.baseUrl}${path}?${params}`, {
+				headers: this.headers(),
+				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+			});
+		} catch (error) {
+			throw new Error(`Tradier ${path}: ${describeFetchError(error)}`);
+		}
 		if (!res.ok) {
+			const detail = (await res.text().catch(() => "")).slice(0, 200).trim();
 			throw new Error(
-				`Tradier ${path}: ${res.status} ${res.statusText}`,
+				`Tradier ${path}: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ""}`,
 			);
 		}
 		return (await res.json()) as Record<string, unknown>;
