@@ -1,6 +1,6 @@
 {
 	"name": "options-chain-mcp",
-	"version": "1.2.0",
+	"version": "1.2.1",
 	"description": "Options Chain MCP Server - options chains, quotes, expirations, and historical prices via Tradier or Alpaca",
 	"type": "module",
 	"main": "./build/index.js",

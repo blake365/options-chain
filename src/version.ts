@@ -7,5 +7,5 @@
  *
  * Keep in sync with the "version" field in package.json.
  */
-export const SERVER_VERSION = "1.2.0";
+export const SERVER_VERSION = "1.2.1";
 export const SERVER_NAME = "options-chain";
