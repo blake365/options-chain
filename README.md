@@ -1,6 +1,19 @@
 # options-chain-mcp
 Read-only MCP server for options research. Pluggable data provider — currently supports [Tradier](https://documentation.tradier.com/brokerage-api) and [Alpaca](https://docs.alpaca.markets).
 
+[![npm version](https://img.shields.io/npm/v/options-chain-mcp.svg)](https://www.npmjs.com/package/options-chain-mcp)
+
+```bash
+npx -y options-chain-mcp
+```
+
+> **You must bring your own market data credentials.** Unlike a server that wraps a
+> free public API, this one talks to a brokerage data provider on your behalf, so it
+> needs a `TRADIER_TOKEN`, or an `ALPACA_API_KEY_ID` + `ALPACA_SECRET_KEY`, in its
+> environment. Free sandbox/paper accounts work fine — see
+> [Choosing a data provider](#choosing-a-data-provider). Started without credentials,
+> the server exits immediately and prints which variable is missing.
+
 ## Overview
 
 This Model Context Protocol (MCP) server gives AI assistants the tools to research options, without any ability to place trades:
@@ -109,8 +122,32 @@ Current SPY price appears to be around $565-566 based on the at-the-money option
 ## Installation
 
 Requires [Node.js](https://nodejs.org/en/download) 20 or newer. No install step is
-needed — `npx` fetches the server on first run. You only need credentials for one of
-the two data providers (see below).
+needed — `npx` fetches the server on first run. You do need credentials for one of the
+two data providers; see [Choosing a data provider](#choosing-a-data-provider).
+
+There are two ways to run this server, and they authenticate differently:
+
+| | Local (stdio, `npx`) | Remote (Cloudflare Workers) |
+| --- | --- | --- |
+| Client authentication | none — runs as a local subprocess | OAuth 2.1 with a passcode |
+| Provider credentials | **yours**, in the client's `env` config | **yours**, as Worker secrets |
+| Who it suits | you, on your own machine | you across devices, or people you share the passcode with |
+| Whose API quota | the local user's | the deploying account's |
+
+Local setup is covered directly below; remote setup is under
+[Running on Cloudflare Workers](#running-on-cloudflare-workers-remote-oauth-21).
+
+### Claude Code
+
+```bash
+claude mcp add options-chain --env TRADIER_TOKEN=your_token -- npx -y options-chain-mcp
+```
+
+### Any other MCP client
+
+The server speaks MCP over STDIO. Run it with `npx -y options-chain-mcp`, or install it
+globally with `npm install -g options-chain-mcp` and run `options-chain-mcp`, with the
+provider credentials present in the environment.
 
 ### Development
 
